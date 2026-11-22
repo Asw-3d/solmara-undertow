@@ -58,6 +58,7 @@ export class Renderer {
     for (const c of game.cars) this._car(game, c, L); // dead cars draw as wrecks
     for (const c of game.police) this._car(game, c, L);
     if (game.player.car) this._car(game, game.player.car, L, true);
+    this._extras(game);
     for (const p of game.peds) this._ped(game, p, L);
     if (!game.player.car) this._player(game, L);
     this._particles(game);
@@ -98,6 +99,68 @@ export class Renderer {
 
   _inView(view, x, y, pad = 90) {
     return x > view.x - pad && x < view.x + view.w + pad && y > view.y - pad && y < view.y + view.h + pad;
+  }
+
+  // Phase-2 extras in flat mode: AIR-1 + its searchlight, roadblock
+  // barriers/cones, and weapon/ammo pickups (simple top-down glyphs).
+  _extras(game) {
+    const { ctx } = this;
+    // Pickups: pulsing diamonds with a letter tag.
+    for (const pk of game.pickups || []) {
+      if (pk.taken) continue;
+      const col = pk.kind === 'smg' ? '#12c2e0' : pk.kind === 'shotgun' ? '#ff7a1a' : '#7dff6a';
+      const s = 10 + Math.sin(game.time * 4 + pk.x) * 2;
+      ctx.save();
+      ctx.translate(pk.x, pk.y);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillStyle = col;
+      ctx.fillRect(-s / 2, -s / 2, s, s);
+      ctx.restore();
+      ctx.fillStyle = '#101018';
+      ctx.font = 'bold 10px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(pk.kind === 'ammo' ? 'A' : pk.kind === 'smg' ? 'S' : 'G', pk.x, pk.y + 3.5);
+    }
+    // Roadblock barriers + cones.
+    for (const rb of game.roadblocks || []) {
+      ctx.save();
+      ctx.translate(rb.x, rb.y);
+      ctx.rotate(rb.vertical ? 0 : Math.PI / 2);
+      for (let i = 0; i < 6; i++) {
+        ctx.fillStyle = i % 2 === 0 ? '#ff7a1a' : '#f2f2f2';
+        ctx.fillRect(-60 + i * 20, -5, 20, 10);
+      }
+      ctx.fillStyle = '#ff7a1a';
+      for (const s of [-72, 72]) {
+        ctx.beginPath();
+        ctx.moveTo(s - 6, 6); ctx.lineTo(s + 6, 6); ctx.lineTo(s, -8); ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+    }
+    // AIR-1: searchlight disc first (under the airframe), then the heli.
+    const heli = game.heli;
+    if (heli && heli.active) {
+      ctx.save();
+      ctx.fillStyle = 'rgba(255,244,190,0.20)';
+      ctx.beginPath(); ctx.arc(heli.lightX, heli.lightY, 92, 0, 7); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,244,190,0.45)'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(heli.lightX, heli.lightY, 92, 0, 7); ctx.stroke();
+      ctx.translate(heli.x, heli.y);
+      ctx.rotate(heli.angle);
+      ctx.fillStyle = '#232c3d';
+      ctx.beginPath(); ctx.roundRect(-19, -9, 38, 18, 8); ctx.fill();
+      ctx.fillRect(-38, -3, 20, 6); // tail boom
+      ctx.fillStyle = '#e8ecf2';
+      ctx.beginPath(); ctx.roundRect(-8, -6, 16, 12, 5); ctx.fill();
+      ctx.restore();
+      // Rotor cross (unrotated by the body heading; spins on heli.rotor).
+      ctx.save();
+      ctx.translate(heli.x, heli.y);
+      ctx.rotate(heli.rotor);
+      ctx.strokeStyle = 'rgba(20,22,30,0.75)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(-34, 0); ctx.lineTo(34, 0); ctx.moveTo(0, -34); ctx.lineTo(0, 34); ctx.stroke();
+      ctx.restore();
+    }
   }
 
   _ground(game, view) {

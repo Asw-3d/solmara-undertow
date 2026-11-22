@@ -7,6 +7,22 @@
 // Toggle mute with M. Audio starts on first user gesture (browser policy).
 // ============================================================================
 
+export const RADIO_STATIONS = [
+  { name: 'Neon FM', desc: 'synthwave' },
+  { name: 'Palma Lo-Fi', desc: 'chill chords' },
+  { name: 'Solmara News Radio', desc: 'news jingle' },
+];
+
+// Step-sequencer patterns for the car radio. Frequencies in Hz, 0 = rest.
+// synthwave: A-minor bass arp + Am F C G pads. lo-fi: maj7 chord loop.
+// news: a bright station-ident jingle phrase that loops with beeps.
+const RADIO_SEQ = [
+  { stepDur: 0.268, steps: 32, bass: [110, 0, 110, 0, 110, 0, 130.8, 0, 87.3, 0, 87.3, 0, 98, 0, 110, 0, 130.8, 0, 130.8, 0, 146.8, 0, 164.8, 0, 98, 0, 98, 0, 110, 0, 123.5, 0],
+    pads: [[220, 261.6, 329.6], [174.6, 220, 261.6], [196, 246.9, 293.7], [164.8, 196, 246.9]] },
+  { stepDur: 0.46, steps: 16, chords: [[174.6, 220, 261.6, 329.6], [164.8, 196, 246.9, 293.7], [146.8, 174.6, 220, 261.6], [130.8, 164.8, 196, 246.9]] },
+  { stepDur: 0.21, steps: 32, lead: [523, 0, 659, 784, 0, 784, 659, 523, 587, 0, 698, 880, 784, 0, 659, 0, 523, 0, 659, 784, 0, 1046, 880, 784, 659, 0, 587, 0, 523, 0, 0, 0] },
+];
+
 export class AudioSys {
   constructor() {
     this.ctx = null;
@@ -15,6 +31,9 @@ export class AudioSys {
     this.engineOsc = null; this.engineGain = null;
     this.sirenOsc = null; this.sirenGain = null; this.sirenLfo = null;
     this.padOn = false;
+    this.radioIdx = -1;      // -1 = radio off
+    this._radioStep = 0;
+    this._radioNext = 0;
   }
 
   init() {
@@ -121,6 +140,11 @@ export class AudioSys {
   }
 
   shoot() { this._noise(0.12, 0.35, 2600); this._blip(220, 0.08, 'square', 0.12, 60); }
+  smgShoot() { this._noise(0.07, 0.26, 3000); this._blip(260, 0.05, 'square', 0.09, 70); }
+  shotgunShoot() { this._noise(0.24, 0.5, 1500); this._blip(140, 0.16, 'square', 0.2, 45); }
+  empty() { this._blip(1250, 0.03, 'square', 0.07); }
+  explosion() { this._noise(0.55, 0.55, 320); this._blip(95, 0.5, 'sine', 0.42, 28); }
+  switchWeapon() { this._blip(700, 0.04, 'square', 0.06, 500); }
   punch() { this._noise(0.07, 0.25, 700); this._blip(120, 0.07, 'sine', 0.2, 50); }
   hurt() { this._blip(300, 0.12, 'sawtooth', 0.12, 120); }
   crash(intensity = 1) { this._noise(0.22 * intensity, 0.3, 500); this._blip(70, 0.2, 'sine', 0.25, 35); }
@@ -133,4 +157,60 @@ export class AudioSys {
   }
   dialog() { this._blip(520, 0.05, 'sine', 0.07, 620); }
   wanted() { this._blip(180, 0.3, 'sawtooth', 0.14, 90); }
+
+  // ---- Car radio -------------------------------------------------------------
+  // setRadio(idx): -1 off, else an index into RADIO_STATIONS. radioTick()
+  // is called once per frame from the game loop; it schedules sequencer
+  // steps a little ahead of the audio clock. All radio voices connect to
+  // the master gain, so the M mute silences the radio too.
+  setRadio(idx) {
+    this.radioIdx = idx;
+    this._radioStep = 0;
+    if (this.ctx) this._radioNext = this.ctx.currentTime + 0.06;
+  }
+
+  _note(freq, t, dur, type, vol) {
+    if (!this.ctx || !freq) return;
+    const ctx = this.ctx;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+    o.connect(g); g.connect(this.master);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+
+  radioTick() {
+    if (!this.ctx || this.radioIdx < 0) return;
+    const ctx = this.ctx;
+    if (this._radioNext < ctx.currentTime - 0.4) this._radioNext = ctx.currentTime + 0.05;
+    const seq = RADIO_SEQ[this.radioIdx];
+    while (this._radioNext < ctx.currentTime + 0.18) {
+      this._radioStepPlay(this.radioIdx, seq, this._radioStep, this._radioNext);
+      this._radioNext += seq.stepDur;
+      this._radioStep = (this._radioStep + 1) % seq.steps;
+    }
+  }
+
+  _radioStepPlay(idx, seq, step, t) {
+    if (idx === 0) { // Neon FM — synthwave
+      const bass = seq.bass[step % seq.bass.length];
+      if (bass) this._note(bass, t, 0.22, 'sawtooth', 0.045);
+      if (step % 8 === 0) {
+        const pad = seq.pads[(step / 8) % seq.pads.length];
+        for (const f of pad) this._note(f, t, 1.9, 'triangle', 0.016);
+      }
+      if (step % 16 === 12) this._note(440, t, 0.2, 'square', 0.012);
+    } else if (idx === 1) { // Palma Lo-Fi — soft maj7 chords + tick
+      if (step % 4 === 0) {
+        const chord = seq.chords[(step / 4) % seq.chords.length];
+        chord.forEach((f, i) => this._note(f * 1.003, t + i * 0.03, 1.7, 'triangle', 0.02));
+      }
+      if (step % 2 === 1) this._note(3200, t, 0.02, 'sine', 0.006);
+    } else { // Solmara News Radio — ident jingle loop
+      const lead = seq.lead[step % seq.lead.length];
+      if (lead) this._note(lead, t, 0.17, 'square', 0.028);
+      if (step % 16 === 0) this._note(1568, t, 0.07, 'sine', 0.02);
+    }
+  }
 }

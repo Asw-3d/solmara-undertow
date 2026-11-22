@@ -7,7 +7,7 @@
 // game.uiButtons each frame; main.js resolves clicks against that list.
 // ============================================================================
 
-import { WORLD, ROADS_V, ROADS_H, PLACES } from './config.js';
+import { WORLD, ROADS_V, ROADS_H, PLACES, WEAPONS, WEAPON_ORDER } from './config.js';
 import { CHARACTERS } from './missions.js';
 import { lighting } from './render.js';
 
@@ -74,9 +74,41 @@ export function drawHUD(game) {
 
   // Money (bottom-right) + speed while driving
   text(ctx, `$${game.money.toLocaleString('en-US')}`, W - 24, canvas.height - 30, 30, '#7dff6a', 'right', true);
+  text(ctx, `Respect · ${game.rank ? game.rank().name : 'Rookie'}`, W - 24, canvas.height - 52, 12.5, '#ffd9a0', 'right', true);
   if (p.car) {
     const kmh = Math.round(Math.abs(p.car.speed) * 0.55);
-    text(ctx, `${kmh} km/h`, W - 24, canvas.height - 66, 17, '#ffffff', 'right', true);
+    text(ctx, `${kmh} km/h`, W - 24, canvas.height - 78, 17, '#ffffff', 'right', true);
+    if (game.radioStation >= 0) {
+      const names = ['Neon FM', 'Palma Lo-Fi', 'Solmara News Radio'];
+      text(ctx, `♪ ${names[game.radioStation]}`, W - 24, canvas.height - 100, 13.5, '#39d5e8', 'right', true);
+    }
+    if (game.upgrades && game.upgrades.nitro) {
+      const nw = 120;
+      ctx.fillStyle = 'rgba(10,12,20,0.55)'; rr(ctx, W - 24 - nw, canvas.height - 122, nw, 10, 5); ctx.fill();
+      ctx.fillStyle = game.nitroMeter > 25 ? '#39d5e8' : '#ff5964';
+      if (game.nitroMeter > 0) { rr(ctx, W - 24 - nw, canvas.height - 122, nw * game.nitroMeter / 100, 10, 5); ctx.fill(); }
+      text(ctx, 'NITRO', W - 24 - nw - 6, canvas.height - 113, 10.5, '#9adfff', 'right', true);
+    }
+  }
+
+  // Weapon slots (bottom-right, above the cash): 1/2/3 + wheel to switch.
+  if (game.weapons && game.state === 'playing') {
+    const sw = 86, sh = 34, gap = 6;
+    const totalW = sw * 3 + gap * 2;
+    let sx = W - 24 - totalW;
+    const sy = canvas.height - 168;
+    WEAPON_ORDER.forEach((key, i) => {
+      const owned = game.weapons.owned[key];
+      const active = game.weapons.current === key && owned;
+      ctx.fillStyle = active ? 'rgba(255,209,102,0.88)' : 'rgba(10,12,20,0.55)';
+      rr(ctx, sx, sy, sw, sh, 7); ctx.fill();
+      if (active) { ctx.strokeStyle = '#ffd166'; ctx.lineWidth = 1.6; ctx.stroke(); }
+      const label = owned ? WEAPONS[key].name : '— — —';
+      text(ctx, `${i + 1} ${label}`, sx + 8, sy + 15, 11.5, active ? '#1b1b26' : owned ? '#fff' : 'rgba(255,255,255,0.35)', 'left', true);
+      const ammo = key === 'pistol' ? '∞' : owned ? `${game.weapons.ammo[key]}` : '';
+      if (ammo) text(ctx, ammo, sx + 8, sy + 29, 10.5, active ? '#1b1b26' : '#ffd9a0', 'left');
+      sx += sw + gap;
+    });
   }
 
   // Wanted stars (top-right, above minimap is avoided — stars sit top-center-right)
@@ -167,6 +199,13 @@ export function drawMinimap(game) {
   const dot = (x, y, color, r = 2.4) => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(mx + x * sx, my + y * sy, r, 0, 7); ctx.fill(); };
   for (const c of game.cars) if (!c.dead) dot(c.x, c.y, c.missionTarget ? '#ffd166' : 'rgba(255,255,255,0.55)', c.missionTarget ? 3.4 : 1.8);
   for (const c of game.police) if (!c.dead) dot(c.x, c.y, Math.sin(game.time * 9) > 0 ? '#4da3ff' : '#ff5964', 3);
+  for (const rb of game.roadblocks || []) dot(rb.x, rb.y, '#ff7a1a', 3.2);
+  for (const pk of game.pickups || []) if (!pk.taken) dot(pk.x, pk.y, '#ff5d8f', 2.8);
+  if (game.heli && game.heli.active) {
+    dot(game.heli.x, game.heli.y, Math.sin(game.time * 10) > 0 ? '#ffffff' : '#39d5e8', 3.4);
+    ctx.strokeStyle = 'rgba(255,240,180,0.5)'; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(mx + game.heli.lightX * sx, my + game.heli.lightY * sy, 95 * sx, 0, 7); ctx.stroke();
+  }
   const mk = game.missions.marker();
   if (mk) {
     dot(mk.x, mk.y, '#ffd166', 4);
@@ -237,6 +276,18 @@ export function drawTitle(game) {
   const { ctx, canvas } = game;
   const W = canvas.width, H = canvas.height;
   const t = game.time;
+  // In 3D mode the WebGL renderer already paints a live orbiting vista of
+  // the city behind this overlay, so the painted backdrop below is skipped
+  // and only the title block, menu and controls card are drawn here.
+  if (!game.renderer3d) drawTitleBackdrop(game);
+  drawTitleForeground(game);
+}
+
+// Painted sunset vista (flat / ?flat=1 mode, and the 2D renderer's title).
+function drawTitleBackdrop(game) {
+  const { ctx, canvas } = game;
+  const W = canvas.width, H = canvas.height;
+  const t = game.time;
   // Sky
   const sky = ctx.createLinearGradient(0, 0, 0, H);
   sky.addColorStop(0, '#2b1055');
@@ -271,7 +322,12 @@ export function drawTitle(game) {
   // Palms silhouettes at the edges
   drawPalm(ctx, 74, H - 8, 1.15, '#160f24');
   drawPalm(ctx, W - 84, H - 6, -1.05, '#160f24');
+}
 
+// Title text, menu buttons and the controls card (both render modes).
+function drawTitleForeground(game) {
+  const { ctx, canvas } = game;
+  const W = canvas.width, H = canvas.height;
   // Title block
   ctx.save();
   ctx.textAlign = 'center';
@@ -287,7 +343,7 @@ export function drawTitle(game) {
   ctx.shadowBlur = 0;
   ctx.fillStyle = 'rgba(255,255,255,0.92)';
   ctx.font = `16.5px ${FONT}`;
-  ctx.fillText('Raka owes the wrong man twelve grand. Six jobs stand between him and the tide.', W / 2, H * 0.20 + Math.min(70, W * 0.062) + 36);
+  ctx.fillText('Raka owes the wrong man twelve grand. Nine jobs stand between him and the tide.', W / 2, H * 0.20 + Math.min(70, W * 0.062) + 36);
   ctx.restore();
 
   // Menu buttons
@@ -305,11 +361,12 @@ export function drawTitle(game) {
   ctx.strokeStyle = 'rgba(255,209,102,0.5)'; ctx.lineWidth = 1.4; ctx.stroke();
   text(ctx, 'CONTROLS', W / 2, cy + 26, 14, '#ffd166', 'center', true);
   const lines = [
-    'WASD / Arrows — move & drive      E — enter / steal car · talk',
-    'Shift — sprint      Space — handbrake      F — punch',
-    'Mouse — aim · Click — shoot (after Mission 2)      P — pause · M — mute',
+    'WASD / Arrows — move & drive      E — enter / steal car · talk · garage',
+    'Shift — sprint / nitro      Space — handbrake      F — punch',
+    'Mouse — aim · Click — shoot      1/2/3 + wheel — weapons      R — car radio',
+    'P — pause · M — mute',
   ];
-  lines.forEach((l, i) => text(ctx, l, W / 2, cy + 56 + i * 24, 14.5, '#e8e4da', 'center'));
+  lines.forEach((l, i) => text(ctx, l, W / 2, cy + 52 + i * 21, 14, '#e8e4da', 'center'));
   text(ctx, 'An original open-world crime story · autosaves after every mission', W / 2, H - 10, 12, 'rgba(255,255,255,0.55)', 'center');
 }
 
@@ -355,10 +412,26 @@ export function drawOverlay(game) {
   const { ctx, canvas } = game;
   const W = canvas.width, H = canvas.height;
   const st = game.state;
+  if (st === 'garage') {
+    ctx.fillStyle = 'rgba(8,9,16,0.62)'; ctx.fillRect(0, 0, W, H);
+    text(ctx, "BIMO'S GARAGE", W / 2, H * 0.26, 44, '#39d5e8', 'center', true);
+    const car = game.serviceCar ? game.serviceCar() : null;
+    const carInfo = car ? `${car.type} · health ${Math.ceil(car.health)}/${car.maxHealth || 100}${car.armorApplied ? ' · armored' : ''}` : 'no car in reach';
+    text(ctx, `Cash $${game.money.toLocaleString('en-US')} · ${carInfo}`, W / 2, H * 0.26 + 34, 15.5, '#ffd9a0', 'center');
+    const bw = 340, bx = W / 2 - bw / 2;
+    let by = H * 0.38;
+    button(game, bx, by, bw, 48, 'REPAIR — $100', 'garage-repair', { disabled: !car || game.money < 100 }); by += 60;
+    button(game, bx, by, bw, 48, game.upgrades.armor ? 'ARMOR — FITTED' : 'ARMOR +50 MAX HP — $300', 'garage-armor', { disabled: game.upgrades.armor || game.money < 300 }); by += 60;
+    button(game, bx, by, bw, 48, 'RESPRAY — $50', 'garage-respray', { disabled: !car || game.money < 50 }); by += 60;
+    button(game, bx, by, bw, 48, game.upgrades.nitro ? 'NITRO — FITTED' : 'NITRO BOOST — $400', 'garage-nitro', { disabled: game.upgrades.nitro || game.money < 400 }); by += 60;
+    button(game, bx, by, bw, 48, 'BACK TO THE STREET', 'garage-close');
+    text(ctx, 'Esc closes · nitro = hold Shift while driving', W / 2, by + 76, 13, 'rgba(255,255,255,0.6)', 'center');
+    return;
+  }
   if (st === 'paused') {
     ctx.fillStyle = 'rgba(8,9,16,0.66)'; ctx.fillRect(0, 0, W, H);
     text(ctx, 'PAUSED', W / 2, H * 0.34, 52, '#ffffff', 'center', true);
-    text(ctx, `Mission: ${game.missions.current ? game.missions.current.title : '—'} · $${game.money.toLocaleString('en-US')} · Earned $${game.missions.totalEarned.toLocaleString('en-US')}`, W / 2, H * 0.34 + 44, 16, '#ffd9a0', 'center');
+    text(ctx, `Mission: ${game.missions.current ? game.missions.current.title : '—'} · $${game.money.toLocaleString('en-US')} · Earned $${game.missions.totalEarned.toLocaleString('en-US')} · Respect: ${game.rank().name}`, W / 2, H * 0.34 + 44, 16, '#ffd9a0', 'center');
     const bw = 280, bx = W / 2 - bw / 2;
     button(game, bx, H * 0.47, bw, 50, 'RESUME', 'resume');
     button(game, bx, H * 0.47 + 62, bw, 50, 'SAVE GAME', 'save');
@@ -382,7 +455,7 @@ export function drawOverlay(game) {
     text(ctx, 'UNDERTOW', W / 2, H * 0.30, 64, '#ffd166', 'center', true);
     text(ctx, 'STORY COMPLETE', W / 2, H * 0.30 + 48, 22, '#ff5d8f', 'center', true);
     text(ctx, `Total mission earnings: $${game.missions.totalEarned.toLocaleString('en-US')}`, W / 2, H * 0.46, 20, '#ffffff', 'center');
-    text(ctx, `Cash on hand: $${game.money.toLocaleString('en-US')} · Solmara stays open — free roam as long as you like.`, W / 2, H * 0.46 + 34, 15.5, '#cfd8dc', 'center');
+    text(ctx, `Cash on hand: $${game.money.toLocaleString('en-US')} · Final respect rank: ${game.rank().name} · Solmara stays open — free roam as long as you like.`, W / 2, H * 0.46 + 34, 15.5, '#cfd8dc', 'center');
     const bw = 300, bx = W / 2 - bw / 2;
     button(game, bx, H * 0.58, bw, 52, 'KEEP ROAMING', 'roam');
     button(game, bx, H * 0.58 + 64, bw, 52, 'TITLE SCREEN', 'title');

@@ -14,7 +14,7 @@
 
 import { WORLD, ROADS_V, ROADS_H, ROAD_W, LANE, CAR_TYPES, TRAFFIC_COUNT, PED_COUNT, PLACES } from './config.js';
 import { RNG } from './random.js';
-import { collideCircle, carCollides, inWater } from './world.js';
+import { collideCircle, carCollides, inWater, nearestRoadPoint } from './world.js';
 
 let NEXT_ID = 1;
 
@@ -25,10 +25,11 @@ export function makeCar(rng, type, x, y, angle) {
     x, y, angle, speed: 0,
     len: spec.len, wid: spec.wid,
     color: rng.pick(spec.colors),
-    health: 100, driver: null, parked: false, police: false,
+    health: 100, maxHealth: 100, driver: null, parked: false, police: false,
     // traffic navigation state
     nav: null, brake: 0, honk: 0,
     dead: false, smokeT: 0, stolen: false,
+    burning: 0, exploded: false, armorApplied: false,
   };
 }
 
@@ -124,6 +125,10 @@ export function spawnPeds(game, rng) {
   const bimo = makePed(rng, PLACES.garage.x + 34, PLACES.garage.y + 10, { state: 'npc', name: 'Bimo' });
   bimo.shirt = '#39d5e8';
   peds.push(nara, bimo);
+  // Rio runs the Palma Beach street races from the beachfront strip.
+  const rio = makePed(rng, PLACES.raceStart.x, PLACES.raceStart.y, { state: 'npc', name: 'Rio' });
+  rio.shirt = '#ffb340';
+  peds.push(rio);
   return peds;
 }
 
@@ -182,6 +187,7 @@ function obstacleAhead(game, car, dist) {
     if (near(c, car.len * 0.75)) return c;
   }
   for (const c of game.police) if (near(c, car.len * 0.75)) return c;
+  for (const rb of game.roadblocks || []) if (near(rb, 46)) return rb;
   if (game.player.car && game.player.car !== car && near(game.player.car, car.len * 0.8)) return game.player.car;
   if (!game.player.car && near(game.player, 20)) return game.player;
   for (const p of game.peds) if (!p.dead && near(p, 16)) return p;
@@ -189,7 +195,7 @@ function obstacleAhead(game, car, dist) {
 }
 
 export function updateTrafficCar(game, car, dt) {
-  if (car.parked || car.dead || car === game.player.car) return;
+  if (car.parked || car.dead || car.burning || car === game.player.car) return;
   const spec = CAR_TYPES[car.type];
   const nav = car.nav;
   if (!nav) return;
@@ -265,7 +271,7 @@ export function spawnPolice(game) {
 }
 
 export function updatePoliceCar(game, car, dt) {
-  if (car.dead) return;
+  if (car.dead || car.burning) return;
   const spec = CAR_TYPES.police;
   const p = game.player;
   const target = p.car ? p.car : p;
@@ -307,9 +313,13 @@ export function updatePoliceCar(game, car, dt) {
     }
   }
   if (car.health <= 0 && !car.dead) {
-    car.dead = true;
-    game.particles.burst(car.x, car.y, 26, '#ff7a1a', 180, 0.9, 5);
-    game.particles.burst(car.x, car.y, 18, '#555555', 90, 1.4, 6);
+    // Death by ramming/wall-scrapes goes through the burn/explode pipeline.
+    if (game.startBurn) game.startBurn(car);
+    else {
+      car.dead = true;
+      game.particles.burst(car.x, car.y, 26, '#ff7a1a', 180, 0.9, 5);
+      game.particles.burst(car.x, car.y, 18, '#555555', 90, 1.4, 6);
+    }
   }
 }
 
@@ -389,5 +399,138 @@ export function scarePeds(game, x, y, radius, threat) {
     if (Math.hypot(ped.x - x, ped.y - y) < radius) {
       ped.state = 'flee'; ped.fleeT = 2.2; ped.target = threat || game.player;
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AIR-1 police helicopter (wanted 4-5). The airframe hovers ~120px above the
+// streets (renderers draw it high); what matters on the ground is the
+// searchlight: a bright disc that chases the player with lag and a capped
+// speed, so a fast car can outrun the light but a runner on foot cannot.
+// While the player stands in the light, heli.spots keeps police pressure
+// (and heat) from decaying — see main.js _updatePolice.
+// ---------------------------------------------------------------------------
+export function makeHeli() {
+  return { x: 0, y: 0, lightX: 0, lightY: 0, angle: 0, rotor: 0, active: false, spots: false };
+}
+
+export function updateHeli(game, dt) {
+  const h = game.heli || (game.heli = makeHeli());
+  const want = game.wanted >= 4 && (game.state === 'playing' || game.state === 'dialog');
+  if (want && !h.active) {
+    h.active = true;
+    h.x = game.player.x + 320; h.y = game.player.y - 280;
+    h.lightX = h.x; h.lightY = h.y;
+    game.banner('AIR-1', 'Solmara PD air unit overhead — stay out of the light');
+  }
+  if (!want) { h.active = false; h.spots = false; return h; }
+  const p = game.player;
+  // Airframe drifts around the player on a slow patrol ellipse.
+  const tx = p.x + Math.cos(game.time * 0.45) * 70;
+  const ty = p.y + Math.sin(game.time * 0.33) * 70;
+  const k = Math.min(1, dt * 1.7);
+  h.x += (tx - h.x) * k;
+  h.y += (ty - h.y) * k;
+  h.angle = Math.atan2(p.y - h.y, p.x - h.x);
+  h.rotor += dt * 43;
+  // Searchlight: moves straight at the player, capped at 215 px/s.
+  const dx = p.x - h.lightX, dy = p.y - h.lightY;
+  const d = Math.hypot(dx, dy);
+  const step = Math.min(d, 215 * dt);
+  if (d > 0.01) { h.lightX += (dx / d) * step; h.lightY += (dy / d) * step; }
+  h.spots = d < 95;
+  return h;
+}
+
+// ---------------------------------------------------------------------------
+// Police roadblocks (wanted 3+). Two cruisers parked sideways across the
+// road ahead of a fleeing driver plus a striped barrier. The cruisers are
+// real cars in game.cars (parked, police) so every existing collision and
+// braking system treats them as solid; the barrier record itself carries a
+// physics disc that main.js enforces for the player's car and traffic
+// braking reads via obstacleAhead.
+// ---------------------------------------------------------------------------
+export function spawnRoadblock(game, atX, atY, vertical) {
+  const cars = [];
+  for (const off of [-31, 31]) {
+    const x = vertical ? atX + off : atX;
+    const y = vertical ? atY : atY + off;
+    const car = makeCar(game.rng, 'police', x, y, vertical ? 0 : Math.PI / 2);
+    car.police = true;
+    car.parked = true;
+    car.roadblock = true;
+    car.nav = null;
+    car.speed = 0;
+    game.cars.push(car);
+    cars.push(car);
+  }
+  const rb = { x: atX, y: atY, vertical, cars, born: game.time };
+  game.roadblocks.push(rb);
+  return rb;
+}
+
+// Place a roadblock on the road ~430px ahead of the player's car.
+export function spawnRoadblockAhead(game) {
+  const car = game.player.car;
+  if (!car) return null;
+  const ax = car.x + Math.cos(car.angle) * 430;
+  const ay = car.y + Math.sin(car.angle) * 430;
+  let dv = Infinity, rx = ROADS_V[0];
+  for (const r of ROADS_V) { const d = Math.abs(ax - r); if (d < dv) { dv = d; rx = r; } }
+  let dh = Infinity, ry = ROADS_H[0];
+  for (const r of ROADS_H) { const d = Math.abs(ay - r); if (d < dh) { dh = d; ry = r; } }
+  const vertical = dv <= dh;
+  const atX = vertical ? rx : Math.max(80, Math.min(WORLD.w - 80, ax));
+  const atY = vertical ? Math.max(80, Math.min(WORLD.sandY - 60, ay)) : ry;
+  return spawnRoadblock(game, atX, atY, vertical);
+}
+
+export function removeRoadblock(game, rb) {
+  game.cars = game.cars.filter((c) => !rb.cars.includes(c));
+  game.roadblocks = game.roadblocks.filter((r) => r !== rb);
+}
+
+export function clearRoadblocks(game) {
+  for (const rb of [...(game.roadblocks || [])]) removeRoadblock(game, rb);
+}
+
+// ---------------------------------------------------------------------------
+// Street-race rivals: free-steering drivers (police-style movement, gentler
+// hands) who run the same checkpoint course as the player. Progress lives
+// on the car (raceCp / raceDone); MissionManager owns the race state.
+// ---------------------------------------------------------------------------
+export function updateRacer(game, car, dt) {
+  if (car.dead || car.burning || car.parked) return;
+  const course = game.missions.raceCourse;
+  const idx = car.raceCp || 0;
+  if (idx >= course.length) {
+    car.raceDone = true;
+    car.speed = Math.max(0, car.speed - 200 * dt);
+    return;
+  }
+  const cp = course[idx];
+  const spec = CAR_TYPES[car.type];
+  const dx = cp.x - car.x, dy = cp.y - car.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 78) { car.raceCp = idx + 1; return; }
+  const desired = Math.atan2(dy, dx);
+  let diff = desired - car.angle;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  let targetSpeed = spec.maxSpeed * (car.raceSkill || 0.82);
+  if (Math.abs(diff) > 1.1) targetSpeed *= 0.45;
+  // Brake for traffic ahead, like a careful street racer.
+  if (obstacleAhead(game, car, car.len + 46)) targetSpeed = Math.min(targetSpeed, 60);
+  car.angle += Math.max(-spec.grip * dt, Math.min(spec.grip * dt, diff * 2.2 * dt * 3));
+  car.speed += Math.max(-300 * dt, Math.min(spec.accel * dt, targetSpeed - car.speed));
+  const nx = car.x + Math.cos(car.angle) * car.speed * dt;
+  const ny = car.y + Math.sin(car.angle) * car.speed * dt;
+  const probe = { x: nx, y: ny, angle: car.angle, len: car.len, wid: car.wid };
+  if (!carCollides(game.world, probe) && !inWater(game.world, nx, ny)) {
+    car.x = nx; car.y = ny;
+  } else {
+    if (!carCollides(game.world, { ...probe, y: car.y })) car.x = nx;
+    else if (!carCollides(game.world, { ...probe, x: car.x })) car.y = ny;
+    else car.speed *= 0.3;
   }
 }

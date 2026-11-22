@@ -141,11 +141,20 @@ export function generateWorld(seed = 1337) {
   for (let i = 0; i < yEdges.length; i += 2) yCells.push([yEdges[i], yEdges[i + 1]]);
 
   function addBuilding(x, y, w, h, kind, districtId) {
+    const floors = kind === 'tower' ? rng.int(6, 14) : kind === 'hotel' ? rng.int(4, 7) : rng.int(1, 3);
     const b = {
       x, y, w, h, kind, district: districtId,
       color: rng.pick(BUILDING_COLORS[districtId] || BUILDING_COLORS.downtown),
       roof: rng.pick(ROOF_BY_DISTRICT[districtId] || ROOF_COLORS),
-      floors: kind === 'tower' ? rng.int(6, 14) : kind === 'hotel' ? rng.int(4, 7) : rng.int(1, 3),
+      floors,
+      // Extrusion height for the 3D renderer (render3d.js): roughly one
+      // storey per floor, squat single-storey kinds by their footprint.
+      height: kind === 'tower' ? floors * 21
+        : kind === 'hotel' ? floors * 19
+        : kind === 'house' ? 24
+        : kind === 'warehouse' ? 30
+        : kind === 'shed' ? 18
+        : floors * 19,
       neon: districtId === 'downtown' ? rng.pick(PALETTE.neon) : null,
       seed: rng.int(1, 99999),
     };
@@ -221,7 +230,7 @@ export function generateWorld(seed = 1337) {
   // mission marker and both NPCs gather on the street side of it.
   const garage = {
     x: 388, y: 556, w: 204, h: 92, kind: 'garage', district: 'suburb',
-    color: '#4f7d8c', roof: '#33525e', floors: 1, neon: '#39d5e8', seed: 42,
+    color: '#4f7d8c', roof: '#33525e', floors: 1, height: 22, neon: '#39d5e8', seed: 42,
   };
   decorateBuilding(garage, rng);
   buildings.push(garage);

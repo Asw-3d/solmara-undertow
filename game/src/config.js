@@ -49,6 +49,11 @@ export const PLACES = {
   policeHQ:  { x: 1980, y: 985,  label: 'Solmara PD' },
   palmaCar:  { x: 618,  y: 2153, label: 'Palma Grand Hotel' },
   start:     { x: 838,  y: 985,  label: 'Casa Verde Corner' },
+  smgPickup: { x: 2560, y: 1990, label: 'Port Warehouse' },
+  shotgunPickup: { x: 2408, y: 1450, label: 'Portside Plant' },
+  raceStart: { x: 500,  y: 2130, label: 'Palma Beach Strip' },
+  crate:     { x: 2660, y: 2060, label: 'Cash Crate' },
+  hotMetalCar: { x: 430, y: 2153, label: 'Beachfront Avenue' },
 };
 
 // Sunset-forward palette: warm dusk grade, teal water, Downtown neon.
@@ -94,3 +99,27 @@ export const CRIME = {
   gangKill: 25,
   policeHit: 80,
 };
+
+// Weapon slots (keys 1/2/3 + wheel). Pistol ammo is infinite; SMG and
+// shotgun burn the ammo pools stored on the game / in the save file.
+export const WEAPONS = {
+  pistol:  { name: 'Pistol',  cd: 0.21,  dmg: 55, carDmg: 9, range: 540, pellets: 1, spread: 0 },
+  smg:     { name: 'SMG',     cd: 0.095, dmg: 26, carDmg: 5, range: 470, pellets: 1, spread: 0.05 },
+  shotgun: { name: 'Shotgun', cd: 0.78,  dmg: 30, carDmg: 7, range: 300, pellets: 5, spread: 0.15 },
+};
+export const WEAPON_ORDER = ['pistol', 'smg', 'shotgun'];
+
+// Respect ranks by lifetime earnings (missions + race prizes). Each rank
+// above Rookie adds +5% to mission payouts.
+export const RANKS = [
+  { name: 'Rookie', at: 0 },
+  { name: 'Runner', at: 1500 },
+  { name: 'Wheelman', at: 3500 },
+  { name: 'Ghost', at: 6000 },
+  { name: 'Kingpin', at: 9500 },
+];
+export function rankFor(earned) {
+  let idx = 0;
+  for (let i = 0; i < RANKS.length; i++) if (earned >= RANKS[i].at) idx = i;
+  return { ...RANKS[idx], index: idx };
+}

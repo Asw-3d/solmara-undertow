@@ -10,6 +10,7 @@ export class Input {
     this.keys = new Set();       // currently held (by e.code)
     this.pressedSet = new Set(); // pressed since last frame
     this.mouse = { x: 0, y: 0, down: false, clicked: false };
+    this.wheel = 0; // signed wheel steps since last frame (weapon switching)
 
     window.addEventListener('keydown', (e) => {
       if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
@@ -29,6 +30,10 @@ export class Input {
     });
     window.addEventListener('mouseup', () => { this.mouse.down = false; });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    canvas.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      this.wheel += e.deltaY > 0 ? 1 : -1;
+    }, { passive: false });
   }
 
   down(...codes) { return codes.some((c) => this.keys.has(c)); }
@@ -48,5 +53,6 @@ export class Input {
   postUpdate() {
     this.pressedSet.clear();
     this.mouse.clicked = false;
+    this.wheel = 0;
   }
 }
